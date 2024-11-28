@@ -1,0 +1,46 @@
+# Object files and executables
+*.o
+*.out
+*.d
+
+# Pintos build directories
+/build/
+/build/*
+
+# Kernel and user program binaries
+/threads/kernel.o
+/userprog/userprog.o
+/vm/vm.o
+/filesys/filesys.o
+
+# Debug files
+*.gdb
+*.swp
+*.swo
+*.dSYM/
+*.gdbinit
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+*~
+
+# Editor and system files
+.DS_Store
+.idea/
+.vscode/
+*.iml
+
+# Compilation and linking output
+*.elf
+*.bin
+*.a
+
+# Coverage files (if using gcov or similar tools)
+*.gcda
+*.gcno
+*.gcov
+
+# Qemu
+utils/qemu     # Ignore QEMU binaries and utilities
