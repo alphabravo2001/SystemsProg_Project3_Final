@@ -14,12 +14,24 @@ static void syscall_handler(struct intr_frame *);
 static int32_t get_user (const uint8_t *uaddr);
 static int memread_from_user (void *src, void *des, size_t bytes);
 
-enum fd_search_filter { FD_FILE = 1, FD_DIRECTORY = 2 };
-
 struct lock filesys_lock;
 
-static struct file_desc* find_file_desc(struct thread *, int fd, enum fd_search_filter flag);
 static struct file_desc* find_file_desc_(struct thread *, int fd);
+
+/** System Call Handler Function Declarations **/
+void sys_halt(void);
+void sys_exit(int status);
+tid_t sys_exec(const char *cmd_line);
+static int sys_wait(tid_t child_tid);
+bool sys_create(const char* filename, unsigned initial_size);
+bool sys_remove(const char* filename);
+int sys_open(const char *file);
+int sys_read(int fd, void *buffer, unsigned size);
+int sys_filesize(int fd);
+int sys_write(int fd, const void*buffer, unsigned size);
+void sys_seek(int fd, unsigned pos);
+unsigned sys_tell(int fd);
+void sys_close(int fd);
 
 void
 syscall_init(void)
@@ -82,242 +94,10 @@ memread_from_user (void *src, void *dst, size_t bytes)
   return (int)bytes;
 }
 
-void sys_halt(void) {
-	shutdown_power_off();
-}
-
-static int sys_wait(tid_t child_tid) {
-	return process_wait(child_tid);
-}
-
-void sys_exit(int status) {
-  printf("%s: exit(%d)\n", thread_current()->name, status);
-
-  struct process_control_block *pcb = thread_current()->pcb;
-  if(pcb != NULL) {
-    pcb->exitcode = status;
-  }
-
-  thread_exit();
-}
-
-int sys_write(int fd, const void*buffer, unsigned size)
-{
-    int ret = -1;
-
-    // Validate buffer pointer and memory range
-    if (buffer == NULL) {
-        sys_exit(-1);  // Null buffer is invalid
-    }
-
-    for (size_t i = 0; i < size; i++) {
-        if (!is_user_vaddr((char *)buffer + i) || pagedir_get_page(thread_current()->pagedir, (char *)buffer + i) == NULL) {
-            sys_exit(-1);  // Invalid user memory
-        }
-    }
-
-    // Handle stdout separately without locking
-    if (fd == 1) {  // stdout
-        putbuf(buffer, size);
-        return size;
-    }
-
-    // Validate file descriptor and perform file write
-    if (fd < 2) {  // Invalid file descriptors: 0 (stdin) and negative values
-        return -1;
-    }
-
-    lock_acquire(&filesys_lock);
-
-    struct file_desc *file_d = find_file_desc_(thread_current(), fd);
-    if (file_d && file_d->file) {
-        ret = file_write(file_d->file, buffer, size);
-    } else {
-        ret = -1;  // Invalid FD or file not open
-    }
-
-    lock_release(&filesys_lock);
-    return ret;
-}
-
-bool sys_create(const char* filename, unsigned initial_size) {
-
-    if (filename == NULL || !is_user_vaddr(filename)) {
-        sys_exit(-1);  // Invalid file name
-    }
-
-    // Ensure filename is a valid, null-terminated string
-    if (pagedir_get_page(thread_current()->pagedir, filename) == NULL) {
-        sys_exit(-1);  // Invalid memory
-    }
-
-    // Validate length
-    if (strlen(filename) == 0) {
-        sys_exit(-1);  // Invalid size
-    }
-
-    bool return_code;
-    return_code = filesys_create(filename, initial_size, false);
-    return return_code;
-}
-
-bool sys_remove(const char* filename) {
-	bool return_code;
-
-	return_code = filesys_remove(filename);
-	return return_code;
-}
-
-int sys_open(const char *file_name) {
-
-    if (file_name == NULL || !is_user_vaddr(file_name)) {
-        sys_exit(-1);  // Invalid file name
-    }
-
-    // Ensure filename is a valid, null-terminated string
-    if (pagedir_get_page(thread_current()->pagedir, file_name) == NULL) {
-        sys_exit(-1);  // Invalid memory
-    }
-
-    lock_acquire(&filesys_lock);
-
-    // Attempt to open the file
-    struct file *file_opened = filesys_open(file_name);
-    if (file_opened == NULL) {
-        lock_release(&filesys_lock);
-        return -1;   // File could not be opened
-    }
-
-    // Allocate memory for a file descriptor structure
-    struct file_desc *fd_entry = malloc(sizeof(struct file_desc));
-    if (fd_entry == NULL) {
-        file_close(file_opened);  // Clean up the opened file
-        lock_release(&filesys_lock);
-        sys_exit(-1);   // Memory allocation failed
-    }
-
-    // Initialize the file descriptor structure
-    fd_entry->file = file_opened;
-    fd_entry->id = thread_current()->max_fd++;  // Assign the next available FD
-
-    // Add the file descriptor to the current thread's list
-    list_push_back(&thread_current()->file_descriptors, &fd_entry->elem);
-
-    lock_release(&filesys_lock);
-    return fd_entry->id;
-
-}
-
-int sys_read(int fd, void *buffer, unsigned size) {
-    int ret;
-
-    // Validate buffer pointer and memory range
-    if (buffer == NULL) {
-        sys_exit(-1);  // Null buffer is invalid
-    }
-
-    for (size_t i = 0; i < size; i++) {
-        if (!is_user_vaddr((char *)buffer + i) || pagedir_get_page(thread_current()->pagedir, (char *)buffer + i) == NULL) {
-            sys_exit(-1);  // Invalid user memory
-        }
-    }
-
-    if (size == 0) {
-        return 0;  // Nothing to read
-    }
-
-    lock_acquire(&filesys_lock);
-
-    // stdin
-    if (fd == 0) {
-        unsigned i;
-        char *char_buffer = (char *)buffer;
-        for (i = 0; i < size; ++i) {
-            char_buffer[i] = input_getc();
-        }
-        ret = size;
-    }
-    else{
-        struct file_desc* file_d = find_file_desc_(thread_current(), fd);
-
-        if(file_d && file_d->file) {
-            ret = file_read(file_d->file, buffer, size);
-        }
-        else{
-            ret = -1;
-        }
-    }
-
-    lock_release(&filesys_lock);
-    return ret;
-}
-
-void sys_close(int fd) {
-
-    lock_acquire(&filesys_lock);
-    struct file_desc *file_d = find_file_desc_(thread_current(), fd);
-
-    //check valid and non-null fd
-    if (file_d && file_d->file) {
-        file_close(file_d->file);
-
-        // close dir if it is directory
-        if (file_d->dir) {
-            list_remove(&(file_d->elem));
-        }
-        list_remove(&(file_d->elem));
-        free(file_d);
-    }
-    lock_release(&filesys_lock);
-}
-
-
-tid_t sys_exec(char *cmd_line) {
-    if (cmd_line == NULL || !is_user_vaddr(cmd_line)) {
-        sys_exit(-1);  // Invalid file name
-    }
-
-    // Ensure filename is a valid, null-terminated string
-    if (pagedir_get_page(thread_current()->pagedir, cmd_line) == NULL) {
-        sys_exit(-1);  // Invalid memory
-    }
-
-	return process_execute(cmd_line);
-}
-
-
-static struct file_desc*
-find_file_desc(struct thread *t, int fd, enum fd_search_filter flag)
-{
-  if (fd < 2) {
-    return NULL;
-  }
-
-  struct list_elem *e;
-
-  if (! list_empty(&t->file_descriptors)) {
-    for(e = list_begin(&t->file_descriptors);
-        e != list_end(&t->file_descriptors); e = list_next(e))
-    {
-      struct file_desc *desc = list_entry(e, struct file_desc, elem);
-      if(desc->id == fd) {
-        // found. filter by flag to distinguish file and directorys
-        if (desc->dir != NULL && (flag & FD_DIRECTORY) )
-          return desc;
-        else if (desc->dir == NULL && (flag & FD_FILE) )
-          return desc;
-      }
-    }
-  }
-
-  return NULL; // not found
-}
-
-
 static struct file_desc*
 find_file_desc_(struct thread *t, int fd)
 {
-    if (fd < 2) {  // Skip stdin, stdout, stderr
+    if (fd < 3) {  // Skip stdin, stdout, stderr
         return NULL;
     }
 
@@ -416,6 +196,16 @@ syscall_handler(struct intr_frame *f)
       break;
     }
 
+    case SYS_FILESIZE:
+    {
+        int fd, ret;
+        memread_from_user(f->esp + 4, &fd, sizeof(fd));
+
+        ret = sys_filesize(fd);
+        f->eax = ret;
+        break;
+    }
+
 	case SYS_WRITE:
 	{
         int fd;
@@ -458,6 +248,30 @@ syscall_handler(struct intr_frame *f)
 		break;
 	}
 
+    case SYS_SEEK:
+    {
+        int fd;
+        unsigned position;
+
+        memread_from_user(f->esp + 4, &fd, sizeof(fd));
+        memread_from_user(f->esp + 8, &position, sizeof(position));
+
+        sys_seek(fd, position);
+        break;
+    }
+
+    case SYS_TELL:
+    {
+        int fd;
+        unsigned return_code;
+
+        memread_from_user(f->esp + 4, &fd, sizeof(fd));
+
+        return_code = sys_tell(fd);
+        f->eax = (uint32_t) return_code;
+        break;
+    }
+
      case SYS_CLOSE: // 12
      {
          int fd;
@@ -470,3 +284,275 @@ syscall_handler(struct intr_frame *f)
 		sys_exit(-1);
 	}
 }
+
+
+/** System Call Handler Function Implementations **/
+
+void sys_halt(void) {
+    shutdown_power_off();
+}
+
+static int sys_wait(tid_t child_tid) {
+    return process_wait(child_tid);
+}
+
+void sys_exit(int status) {
+    printf("%s: exit(%d)\n", thread_current()->name, status);
+
+    struct process_control_block *pcb = thread_current()->pcb;
+    if(pcb != NULL) {
+        pcb->exitcode = status;
+    }
+
+    thread_exit();
+}
+
+int sys_write(int fd, const void*buffer, unsigned size)
+{
+    int ret = -1;
+
+    // Validate buffer pointer and memory range
+    if (buffer == NULL) {
+        sys_exit(-1);  // Null buffer is invalid
+    }
+
+    for (size_t i = 0; i < size; i++) {
+        if (!is_user_vaddr((char *)buffer + i) || pagedir_get_page(thread_current()->pagedir, (char *)buffer + i) == NULL) {
+            sys_exit(-1);  // Invalid user memory
+        }
+    }
+
+    lock_acquire(&filesys_lock);
+
+    // Handle stdout separately without locking
+    if (fd == 1) {  // stdout
+        putbuf(buffer, size);
+        lock_release(&filesys_lock);
+        return size;
+    }
+
+    // Validate file descriptor and perform file write
+    if (fd < 2) {  // Invalid file descriptors: 0 (stdin) and negative values
+        lock_release(&filesys_lock);
+        return -1;
+    }
+
+    struct file_desc *file_d = find_file_desc_(thread_current(), fd);
+    if (file_d && file_d->file) {
+        ret = file_write(file_d->file, buffer, size);
+    } else {
+        ret = -1;  // Invalid FD or file not open
+    }
+
+    lock_release(&filesys_lock);
+    return ret;
+}
+
+int sys_filesize(int fd) {
+    struct file_desc* file_d;
+
+    lock_acquire (&filesys_lock);
+    file_d = find_file_desc_(thread_current(), fd);
+
+    if(file_d == NULL) {
+        lock_release (&filesys_lock);
+        return -1;
+    }
+
+    int ret = file_length(file_d->file);
+    lock_release (&filesys_lock);
+    return ret;
+}
+
+bool sys_create(const char* filename, unsigned initial_size) {
+
+    if (filename == NULL || !is_user_vaddr(filename)) {
+        sys_exit(-1);  // Invalid file name
+    }
+
+    // Ensure filename is a valid, null-terminated string
+    if (pagedir_get_page(thread_current()->pagedir, filename) == NULL) {
+        sys_exit(-1);  // Invalid memory
+    }
+
+    // Validate length
+    if (strlen(filename) == 0) {
+        sys_exit(-1);  // Invalid size
+    }
+
+    bool return_code;
+    return_code = filesys_create(filename, initial_size, false);
+    return return_code;
+}
+
+bool sys_remove(const char* filename) {
+    bool return_code;
+
+    if (filename == NULL || !is_user_vaddr(filename)) {
+        sys_exit(-1);
+    }
+
+    if (pagedir_get_page(thread_current()->pagedir, filename) == NULL) {
+        sys_exit(-1);
+    }
+
+    lock_acquire(&filesys_lock);
+    struct file *file = filesys_open(filename);
+    if (file != NULL) {
+        file_close(file);  // Close our temporary reference
+    }
+
+    return_code = filesys_remove(filename);
+    lock_release(&filesys_lock);
+
+    return return_code;
+}
+
+int sys_open(const char *file_name) {
+
+    if (file_name == NULL || !is_user_vaddr(file_name)) {
+        sys_exit(-1);  // Invalid file name
+    }
+
+    // Ensure filename is a valid, null-terminated string
+    if (pagedir_get_page(thread_current()->pagedir, file_name) == NULL) {
+        sys_exit(-1);  // Invalid memory
+    }
+
+    lock_acquire(&filesys_lock);
+
+    // Attempt to open the file
+    struct file *file_opened = filesys_open(file_name);
+    if (file_opened == NULL) {
+        lock_release(&filesys_lock);
+        return -1;   // File could not be opened
+    }
+
+    // Allocate memory for a file descriptor structure
+    struct file_desc *fd_entry = malloc(sizeof(struct file_desc));
+    if (fd_entry == NULL) {
+        file_close(file_opened);  // Clean up the opened file
+        lock_release(&filesys_lock);
+        sys_exit(-1);   // Memory allocation failed
+    }
+
+    // Initialize the file descriptor structure
+    fd_entry->file = file_opened;
+    fd_entry->id = ++thread_current()->max_fd;  // Assign the next available FD
+
+    // Add the file descriptor to the current thread's list
+    list_push_back(&thread_current()->file_descriptors, &fd_entry->elem);
+
+    lock_release(&filesys_lock);
+    return fd_entry->id;
+
+}
+
+int sys_read(int fd, void *buffer, unsigned size) {
+    int ret;
+
+    if (buffer == NULL || !is_user_vaddr(buffer)) {
+        sys_exit(-1);
+    }
+
+    // Check if buffer range is valid (start and end addresses)
+    if (!is_user_vaddr(buffer + size - 1)) {
+        sys_exit(-1);
+    }
+
+    // Check if buffer is mapped in page directory
+    if (pagedir_get_page(thread_current()->pagedir, buffer) == NULL) {
+        sys_exit(-1);
+    }
+
+    if (size == 0) {
+        return 0;  // Nothing to read
+    }
+
+    lock_acquire(&filesys_lock);
+
+    // stdin
+    if (fd == 0) {
+        unsigned i;
+        char *char_buffer = (char *)buffer;
+        for (i = 0; i < size; ++i) {
+            char_buffer[i] = input_getc();
+        }
+        ret = size;
+    }
+    else{
+        struct file_desc* file_d = find_file_desc_(thread_current(), fd);
+
+        if(file_d && file_d->file) {
+            ret = file_read(file_d->file, buffer, size);
+        }
+        else{
+            ret = -1;
+        }
+    }
+
+    lock_release(&filesys_lock);
+    return ret;
+}
+
+void sys_seek(int fd, unsigned position) {
+    lock_acquire (&filesys_lock);
+    struct file_desc* file_d = find_file_desc_(thread_current(), fd);
+
+    if(file_d && file_d->file) {
+        file_seek(file_d->file, position);
+    }
+    else {
+    }
+
+    lock_release (&filesys_lock);
+}
+
+unsigned sys_tell(int fd) {
+    lock_acquire (&filesys_lock);
+    struct file_desc* file_d = find_file_desc_(thread_current(), fd);
+
+    unsigned ret;
+    if(file_d && file_d->file) {
+        ret = file_tell(file_d->file);
+    }
+    else {
+    }
+
+    lock_release (&filesys_lock);
+    return ret;
+}
+
+void sys_close(int fd) {
+
+    lock_acquire(&filesys_lock);
+    struct file_desc *file_d = find_file_desc_(thread_current(), fd);
+
+    //check valid and non-null fd
+    if (file_d && file_d->file) {
+        file_close(file_d->file);
+
+        // close dir if it is directory
+        if (file_d->dir) {
+            list_remove(&(file_d->elem));
+        }
+        list_remove(&(file_d->elem));
+        free(file_d);
+    }
+    lock_release(&filesys_lock);
+}
+
+
+tid_t sys_exec(const char *cmd_line) {
+    if (cmd_line == NULL || !is_user_vaddr(cmd_line)) {
+        sys_exit(-1);  // Invalid file name
+    }
+
+    // Ensure filename is a valid, null-terminated string
+    if (pagedir_get_page(thread_current()->pagedir, cmd_line) == NULL) {
+        sys_exit(-1);  // Invalid memory
+    }
+
+    return process_execute(cmd_line);
+}
+
