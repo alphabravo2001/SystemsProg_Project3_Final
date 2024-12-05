@@ -80,14 +80,12 @@ bool is_valid_user_address(const void *buffer, unsigned size) {
 }
 
 static int
-memread_from_user (void *src, void *dst, size_t bytes)
+memread_from_user(void *src, void *dst, size_t bytes)
 {
   int32_t value;
   size_t i;
   for(i=0; i<bytes; i++) {
     value = check_user(src + i);
-    // if(value == -1) // segfault or invalid memory access
-    //   fail_invalid_access();
 
     *(char*)(dst + i) = value & 0xff;
   }

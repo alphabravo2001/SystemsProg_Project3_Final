@@ -297,6 +297,13 @@ void
 process_exit (void)
 {
     struct thread *cur = thread_current ();
+
+    //Allow writes to executable before closing
+    if (cur->exec_file!= NULL) {
+        file_close (cur->exec_file);
+        cur->exec_file = NULL;
+    }
+
     uint32_t *pd;
 
     free_children (cur);
@@ -508,19 +515,23 @@ load(const char *file_name, void(**eip) (void), void **esp)
         }
     }
 
-    /* Set up stack. */
+    //setup stack
     if (!setup_stack(esp)) {
         goto done;
     }
 
-    /* Start address. */
+    //setup start address
     *eip = (void (*)(void))ehdr.e_entry;
+
+    /* Deny writes to executables. */
+    file_deny_write(file);
+    thread_current()->exec_file = file;
 
     success = true;
 
     done:
     /* We arrive here whether the load is successful or not. */
-    file_close(file);
+    //file_close(file);
     return success;
 }
 
