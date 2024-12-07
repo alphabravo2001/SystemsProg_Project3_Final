@@ -111,8 +111,8 @@ syscall_handler(struct intr_frame *f)
         void* cmdline;
         safe_copy_from_user(f->esp + 4, &cmdline, sizeof(cmdline));
 
-        int return_code = sys_exec((const char*) cmdline);
-        f->eax = (uint32_t) return_code;
+        int ret = sys_exec((const char*) cmdline);
+        f->eax = (uint32_t) ret;
         break;
     }
 
@@ -139,7 +139,7 @@ syscall_handler(struct intr_frame *f)
     case SYS_READ:
 	{
 
-		int fd, return_code;
+		int fd, ret;
       	void *buffer;
       	unsigned size;
 
@@ -147,20 +147,20 @@ syscall_handler(struct intr_frame *f)
         safe_copy_from_user(f->esp + 8, &buffer, sizeof(buffer));
         safe_copy_from_user(f->esp + 12, &size, sizeof(size));
 
-      	return_code = sys_read(fd, buffer, size);
-      	f->eax = (uint32_t) return_code;
+      	ret = sys_read(fd, buffer, size);
+      	f->eax = (uint32_t) ret;
       	break;
 	}
 
 	case SYS_OPEN:
     {
       const char* filename;
-      int return_code;
+      int ret;
 
         safe_copy_from_user(f->esp + 4, &filename, sizeof(filename));
 
-      return_code = sys_open(filename);
-      f->eax = return_code;
+      ret = sys_open(filename);
+      f->eax = ret;
       break;
     }
 
@@ -194,25 +194,25 @@ syscall_handler(struct intr_frame *f)
 	{
 	  const char* filename;
       unsigned initial_size;
-      bool return_code;
+      bool ret;
 
       safe_copy_from_user(f->esp + 4, &filename, sizeof(filename));
       safe_copy_from_user(f->esp + 8, &initial_size, sizeof(initial_size));
 
-      return_code = sys_create(filename, initial_size);
-      f->eax = return_code;
+      ret = sys_create(filename, initial_size);
+      f->eax = ret;
       break;
 	}
 
 	case SYS_REMOVE:
 	{
 		const char* filename;
-		bool return_code;
+		bool ret;
 
         safe_copy_from_user(f->esp + 4, &filename, sizeof(filename));
 
-		return_code = sys_remove(filename);
-		f->eax = return_code;
+		ret = sys_remove(filename);
+		f->eax = ret;
 		break;
 	}
 
@@ -231,12 +231,12 @@ syscall_handler(struct intr_frame *f)
     case SYS_TELL:
     {
         int fd;
-        unsigned return_code;
+        unsigned ret;
 
         safe_copy_from_user(f->esp + 4, &fd, sizeof(fd));
 
-        return_code = sys_tell(fd);
-        f->eax = (uint32_t) return_code;
+        ret = sys_tell(fd);
+        f->eax = (uint32_t) ret;
         break;
     }
 
@@ -348,13 +348,13 @@ bool sys_create(const char* filename, unsigned initial_size) {
         sys_exit(-1);  // Invalid size
     }
 
-    bool return_code;
-    return_code = filesys_create(filename, initial_size, false);
-    return return_code;
+    bool ret;
+    ret = filesys_create(filename, initial_size, false);
+    return ret;
 }
 
 bool sys_remove(const char* filename) {
-    bool return_code;
+    bool ret;
 
     if (filename == NULL || !is_user_vaddr(filename)) {
         sys_exit(-1);
@@ -370,10 +370,10 @@ bool sys_remove(const char* filename) {
         file_close(file);  // Close our temporary reference
     }
 
-    return_code = filesys_remove(filename);
+    ret = filesys_remove(filename);
     lock_release(&filesys_lock);
 
-    return return_code;
+    return ret;
 }
 
 int sys_open(const char *file_name) {
