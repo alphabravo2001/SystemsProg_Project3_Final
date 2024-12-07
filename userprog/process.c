@@ -202,7 +202,7 @@ push_arguments(const char *argv_tokens[], int argc, void **esp) {
     // word align
     *esp = (void*)((unsigned int)(*esp) & 0xfffffffc);
 
-    // setting last null
+    // push null
     *esp -= 4;
     *((uint32_t*) *esp) = 0;
 
@@ -212,15 +212,15 @@ push_arguments(const char *argv_tokens[], int argc, void **esp) {
         *((void**) *esp) = argv_addr[i];
     }
 
-    // setting **argv (addr of stack, esp)
+    // push **argv (addr of stack, esp)
     *esp -= 4;
     *((void**) *esp) = (*esp + 4);
 
-    // setting argc
+    // push argc
     *esp -= 4;
     *((int*) *esp) = argc;
 
-    // setting ret addr
+    // push ret addr
     *esp -= 4;
     *((int*) *esp) = 0;
 }
