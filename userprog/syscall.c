@@ -12,11 +12,11 @@
 
 static void syscall_handler(struct intr_frame *);
 static int32_t get_user (const uint8_t *uaddr);
-static int memread_from_user (void *src, void *des, size_t bytes);
+static int safe_copy_from_user(void *src, void *des, size_t bytes);
 
 struct lock filesys_lock;
 
-static struct file_desc* find_file_desc_(struct thread *, int fd);
+static struct file_desc* find_file_desc_(struct thread* t, int fd);
 
 /** System Call Handler Function Declarations **/
 void sys_halt(void);
@@ -53,38 +53,12 @@ check_user (const uint8_t *uaddr) {
   return result;
 }
 
-static bool
-put_user (uint8_t *udst, uint8_t byte) {
-    // check that a user pointer `udst` points below PHYS_BASE
-    if (! ((void*)udst < PHYS_BASE)) {
-        return false;
-    }
-
-    int error_code;
-
-    // as suggested in the reference manual, see (3.1.5)
-    asm ("movl $1f, %0; movb %b2, %1; 1:"
-            : "=&a" (error_code), "=m" (*udst) : "q" (byte));
-    return error_code != -1;
-}
-
-//verify pointer is valid and mapped
-bool is_valid_user_address(const void *buffer, unsigned size) {
-	for (unsigned i = 0; i < size; i++) {
-		const void *addr = (const char *)buffer + i;
-		if (addr == NULL || !is_user_vaddr(addr) || pagedir_get_page(thread_current()->pagedir, addr) == NULL) {
-			return false;
-		}
-	}
-	return true;
-}
-
+// safely read data from a memory location provided by a user space to a kernel space
 static int
-memread_from_user(void *src, void *dst, size_t bytes)
+safe_copy_from_user(void *src, void *dst, size_t bytes)
 {
   int32_t value;
-  size_t i;
-  for(i=0; i<bytes; i++) {
+  for (size_t i=0; i<bytes; i++) {
     value = check_user(src + i);
 
     *(char*)(dst + i) = value & 0xff;
@@ -109,12 +83,8 @@ find_file_desc_(struct thread *t, int fd)
         }
     }
 
-    return NULL;  // Not found
+    return NULL;
 }
-
-//int sys_wait(tid_t tid) {
-//	return process_wait(tid);
-//}
 
 static void
 syscall_handler(struct intr_frame *f)
@@ -129,27 +99,27 @@ syscall_handler(struct intr_frame *f)
 	switch (*esp)
 	{
 
-	case SYS_HALT: // 0
+	case SYS_HALT:
 	{
 		sys_halt();
 		NOT_REACHED();
 		break;
 	}
 
-    case SYS_EXEC: // 2
+    case SYS_EXEC:
     {
         void* cmdline;
-        memread_from_user(f->esp + 4, &cmdline, sizeof(cmdline));
+        safe_copy_from_user(f->esp + 4, &cmdline, sizeof(cmdline));
 
         int return_code = sys_exec((const char*) cmdline);
         f->eax = (uint32_t) return_code;
         break;
     }
 
-    case SYS_WAIT: // 3
+    case SYS_WAIT:
     {
         pid_t pid;
-        memread_from_user(f->esp + 4, &pid, sizeof(pid_t));
+        safe_copy_from_user(f->esp + 4, &pid, sizeof(pid_t));
 
         int ret = sys_wait(pid);
         f->eax = (uint32_t) ret;
@@ -159,7 +129,7 @@ syscall_handler(struct intr_frame *f)
 	case SYS_EXIT:
 	{
 		int exitcode;
-      	memread_from_user(f->esp + 4, &exitcode, sizeof(exitcode));
+        safe_copy_from_user(f->esp + 4, &exitcode, sizeof(exitcode));
 
       	sys_exit(exitcode);
       	NOT_REACHED();
@@ -173,9 +143,9 @@ syscall_handler(struct intr_frame *f)
       	void *buffer;
       	unsigned size;
 
-      	memread_from_user(f->esp + 4, &fd, sizeof(fd));
-      	memread_from_user(f->esp + 8, &buffer, sizeof(buffer));
-      	memread_from_user(f->esp + 12, &size, sizeof(size));
+        safe_copy_from_user(f->esp + 4, &fd, sizeof(fd));
+        safe_copy_from_user(f->esp + 8, &buffer, sizeof(buffer));
+        safe_copy_from_user(f->esp + 12, &size, sizeof(size));
 
       	return_code = sys_read(fd, buffer, size);
       	f->eax = (uint32_t) return_code;
@@ -187,7 +157,7 @@ syscall_handler(struct intr_frame *f)
       const char* filename;
       int return_code;
 
-      memread_from_user(f->esp + 4, &filename, sizeof(filename));
+        safe_copy_from_user(f->esp + 4, &filename, sizeof(filename));
 
       return_code = sys_open(filename);
       f->eax = return_code;
@@ -197,7 +167,7 @@ syscall_handler(struct intr_frame *f)
     case SYS_FILESIZE:
     {
         int fd, ret;
-        memread_from_user(f->esp + 4, &fd, sizeof(fd));
+        safe_copy_from_user(f->esp + 4, &fd, sizeof(fd));
 
         ret = sys_filesize(fd);
         f->eax = ret;
@@ -211,9 +181,9 @@ syscall_handler(struct intr_frame *f)
         unsigned size;
 
         /* Validate and extract arguments from user stack */
-        memread_from_user(f->esp + 4, &fd, sizeof(fd));
-        memread_from_user(f->esp + 8, &buffer, sizeof(buffer));
-        memread_from_user(f->esp + 12, &size, sizeof(size));
+        safe_copy_from_user(f->esp + 4, &fd, sizeof(fd));
+        safe_copy_from_user(f->esp + 8, &buffer, sizeof(buffer));
+        safe_copy_from_user(f->esp + 12, &size, sizeof(size));
 
         /* Pass the arguments to the sys_write implementation */
         f->eax = sys_write(fd, buffer, size);
@@ -226,8 +196,8 @@ syscall_handler(struct intr_frame *f)
       unsigned initial_size;
       bool return_code;
 
-      memread_from_user(f->esp + 4, &filename, sizeof(filename));
-      memread_from_user(f->esp + 8, &initial_size, sizeof(initial_size));
+      safe_copy_from_user(f->esp + 4, &filename, sizeof(filename));
+      safe_copy_from_user(f->esp + 8, &initial_size, sizeof(initial_size));
 
       return_code = sys_create(filename, initial_size);
       f->eax = return_code;
@@ -239,7 +209,7 @@ syscall_handler(struct intr_frame *f)
 		const char* filename;
 		bool return_code;
 
-		memread_from_user(f->esp + 4, &filename, sizeof(filename));
+        safe_copy_from_user(f->esp + 4, &filename, sizeof(filename));
 
 		return_code = sys_remove(filename);
 		f->eax = return_code;
@@ -251,8 +221,8 @@ syscall_handler(struct intr_frame *f)
         int fd;
         unsigned position;
 
-        memread_from_user(f->esp + 4, &fd, sizeof(fd));
-        memread_from_user(f->esp + 8, &position, sizeof(position));
+        safe_copy_from_user(f->esp + 4, &fd, sizeof(fd));
+        safe_copy_from_user(f->esp + 8, &position, sizeof(position));
 
         sys_seek(fd, position);
         break;
@@ -263,17 +233,17 @@ syscall_handler(struct intr_frame *f)
         int fd;
         unsigned return_code;
 
-        memread_from_user(f->esp + 4, &fd, sizeof(fd));
+        safe_copy_from_user(f->esp + 4, &fd, sizeof(fd));
 
         return_code = sys_tell(fd);
         f->eax = (uint32_t) return_code;
         break;
     }
 
-     case SYS_CLOSE: // 12
+     case SYS_CLOSE:
      {
          int fd;
-         memread_from_user(f->esp + 4, &fd, sizeof(fd));
+         safe_copy_from_user(f->esp + 4, &fd, sizeof(fd));
 
          sys_close(fd);
          break;

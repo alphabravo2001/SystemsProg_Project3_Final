@@ -28,8 +28,6 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
 
 /*  Helper functions */
-static void free_children (struct thread *);
-static void free_fds (struct thread *);
 static void push_arguments(const char *argv[], int argc, void **esp);
 
 struct process_control_block *
@@ -168,26 +166,12 @@ start_process (struct t_args *targs)
         thread_exit();
     }
 
-    //int argv = push_args (file_name, cmd_len, argc, (int *) &if_.esp);
-    push_arguments (argv_tokens_arr, argc, &if_.esp);
+    push_arguments(argv_tokens_arr, argc, &if_.esp);
 
     palloc_free_page(file_name);
 
     sema_up (&(t->pcb->sema_wait));
 
-
-    /*
-
-    if_.esp -= ((int) ((unsigned int) (if_.esp) % 16) + 8);
-
-
-    if_.esp -= 8;
-    *((int *) (if_.esp + 4)) = argv_tokens_arr;
-    *((int *) (if_.esp)) = argc;
-
-    if_.esp -= 4;
-
-    */
 
     /* Start the user process by simulating a return from an
        interrupt, implemented by intr_exit (in
@@ -218,7 +202,7 @@ push_arguments(const char *argv_tokens[], int argc, void **esp) {
     // word align
     *esp = (void*)((unsigned int)(*esp) & 0xfffffffc);
 
-    // last null
+    // setting last null
     *esp -= 4;
     *((uint32_t*) *esp) = 0;
 
@@ -306,8 +290,26 @@ process_exit (void)
 
     uint32_t *pd;
 
-    free_children (cur);
-    free_fds (cur);
+    // Free child process statuses
+    struct list *children = &cur->child_list;
+    for (struct list_elem *e = list_begin(children); e != list_end(children); ) {
+        struct process_control_block *current_child = list_entry(e, struct process_control_block, elem);
+        if (current_child->exited) {
+            e = list_remove(&current_child->elem); // Remove and move to next element
+            free(current_child);
+        } else {
+            e = list_next(e); // Just move to next element
+        }
+    }
+
+    // Free file descriptors
+    struct list *fd_list = &cur->file_descriptors;
+    for (struct list_elem *e = list_begin(fd_list); e != list_end(fd_list); ) {
+        struct file_desc *fd = list_entry(e, struct file_desc, elem);
+        e = list_remove(&fd->elem); // Remove and move to next element
+        file_close(fd->file);
+        free(fd);
+    }
 
     if (cur->pcb != NULL) {
         cur->pcb->exited = true;
@@ -684,35 +686,3 @@ install_page (void *upage, void *kpage, bool writable)
     return (pagedir_get_page (t->pagedir, upage) == NULL
             && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
-
-/* free up the process_status of child threads if needed */
-static void
-free_children (struct thread *cur)
-{
-    struct list *children = &cur->child_list;
-    for (struct list_elem *e = list_begin (children); e != list_end (children); e = list_next (e))
-    {
-        struct process_control_block *current_child = list_entry (e, struct process_control_block, elem);
-        if (current_child->exited)
-        {
-            e = list_remove (&current_child->elem)->prev;
-            free (current_child);
-        }
-    }
-}
-
-/* free up resources for file descriptors */
-static void
-free_fds (struct thread *cur)
-{
-    struct list *fd_list = &cur->file_descriptors;
-    for (struct list_elem *e = list_begin (fd_list); e != list_end (fd_list); e = list_next (e))
-    {
-        struct file_desc *fd = list_entry (e,
-        struct file_desc, elem);
-        e = list_remove (&fd->elem)->prev;
-        file_close (fd->file);
-        free (fd);
-    }
-}
-

@@ -159,10 +159,14 @@ page_fault(struct intr_frame *f)
     write = (f->error_code & PF_W) != 0;
     user = (f->error_code & PF_U) != 0;
 
-    /* if the page fault it caused by a write violation, exit the process*/
-    if (fault_addr == NULL || !not_present || !is_user_vaddr (fault_addr)) {
-        exit (-1);
+    if (user || not_present){
+        exit(-1);
     }
+
+    /* if the page fault it caused by a write violation, exit the process*/
+        //exit (-1)
+        f->eip = (void*)f->eax;
+        f->eax= 0xffffffff;
 
     /* To implement virtual memory, delete the rest of the function
      * body, and replace it with code that brings in the page to
